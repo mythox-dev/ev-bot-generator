@@ -2,150 +2,110 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>EV Bot Generator — POC</title>
-  <style>
-    :root {
-      --bg: #0f172a;
-      --surface: #1e293b;
-      --text: #f1f5f9;
-      --muted: #94a3b8;
-      --accent: #22c55e;
-      --accent-dark: #16a34a;
-      --focus: #60a5fa;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      line-height: 1.5;
-    }
-
-    header {
-      padding: 1.5rem 1.25rem;
-      border-bottom: 1px solid #334155;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: 1.5rem;
-    }
-
-    main {
-      max-width: 480px;
-      margin: 0 auto;
-      padding: 1.25rem;
-    }
-
-    .status {
-      background: var(--surface);
-      border-radius: 12px;
-      padding: 1.25rem;
-      margin-bottom: 1.25rem;
-    }
-
-    .status p {
-      margin: 0.25rem 0;
-    }
-
-    .status .ok {
-      color: var(--accent);
-      font-weight: 600;
-    }
-
-    button {
-      width: 100%;
-      font-size: 1.1rem;
-      padding: 0.9rem;
-      border-radius: 10px;
-      border: none;
-      background: var(--accent);
-      color: #052e16;
-      font-weight: 600;
-      cursor: pointer;
-      touch-action: manipulation;
-    }
-
-    button:hover { background: var(--accent-dark); }
-
-    button:focus-visible {
-      outline: 3px solid var(--focus);
-      outline-offset: 2px;
-    }
-
-    #counter {
-      font-size: 2.5rem;
-      font-weight: 700;
-      text-align: center;
-      margin: 1rem 0;
-    }
-
-    #log {
-      list-style: none;
-      padding: 0;
-      margin: 1rem 0 0;
-      font-size: 0.9rem;
-      color: var(--muted);
-    }
-
-    #log li {
-      padding: 0.4rem 0;
-      border-bottom: 1px solid #334155;
-    }
-
-    .visually-hidden {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip: rect(0 0 0 0);
-      white-space: nowrap;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>EV Bot Command Builder</title>
+  <meta name="description" content="Build and copy EV Bot Discord slash commands without memorizing syntax." />
+  <meta name="theme-color" content="#0b1120" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="EV Bot" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <header>
-    <h1>EV Bot Generator</h1>
-    <p style="margin: 0.25rem 0 0; color: var(--muted);">Proof of concept</p>
-  </header>
+  <div id="app">
+    <header class="app-header">
+      <h1>EV Bot Command Builder</h1>
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button id="tab-favorites" class="tab-btn" role="tab" aria-selected="true" aria-controls="panel-favorites" type="button">Favorites</button>
+        <button id="tab-builder" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-builder" type="button">Builder</button>
+      </nav>
+    </header>
 
-  <main>
-    <section class="status" aria-labelledby="status-heading">
-      <h2 id="status-heading" class="visually-hidden">Connection status</h2>
-      <p><span class="ok">&#9679;</span> Server reachable</p>
-      <p id="ua-info">Loading device info&hellip;</p>
-    </section>
+    <main>
+      <p id="fatal-error" class="field-hint" role="alert" style="color:var(--danger);" hidden></p>
 
-    <section aria-labelledby="counter-heading">
-      <h2 id="counter-heading" class="visually-hidden">Tap counter</h2>
-      <div id="counter" aria-live="polite">0</div>
-      <button id="tap-btn" type="button">Tap me</button>
-      <ul id="log" aria-label="Activity log"></ul>
-    </section>
-  </main>
+      <section id="panel-favorites" role="tabpanel" aria-labelledby="tab-favorites">
+        <div id="favorites-list"></div>
+      </section>
 
-  <script>
-    const counterEl = document.getElementById('counter');
-    const btn = document.getElementById('tap-btn');
-    const log = document.getElementById('log');
-    const uaInfo = document.getElementById('ua-info');
-    let count = 0;
+      <section id="panel-builder" role="tabpanel" aria-labelledby="tab-builder" hidden>
+        <div class="field-block">
+          <h2>League</h2>
+          <div id="league-chips" class="chip-row"></div>
+        </div>
 
-    uaInfo.textContent = `Viewport: ${window.innerWidth}×${window.innerHeight}`;
+        <div class="field-block">
+          <h2>Market Group</h2>
+          <div id="group-chips" class="chip-row"></div>
+        </div>
 
-    btn.addEventListener('click', () => {
-      count += 1;
-      counterEl.textContent = count;
-      const item = document.createElement('li');
-      item.textContent = `Tap #${count} at ${new Date().toLocaleTimeString()}`;
-      log.prepend(item);
-      while (log.children.length > 5) log.removeChild(log.lastChild);
-    });
-  </script>
+        <div class="field-block">
+          <h2>Markets</h2>
+          <div id="markets-container"></div>
+        </div>
+
+        <div class="field-block">
+          <h2>Name Filter <span class="field-hint" style="display:inline;">(optional)</span></h2>
+          <input id="name-input" class="text-input" type="text" placeholder="e.g. Over" autocomplete="off" autocapitalize="off" spellcheck="false" />
+        </div>
+
+        <div class="field-block">
+          <h2>Sharps</h2>
+          <div id="sharps-chips" class="chip-row"></div>
+        </div>
+
+        <div class="field-block">
+          <h2>Target Book</h2>
+          <select id="book-select" class="select-input"></select>
+        </div>
+
+        <div class="field-block inline-fields">
+          <div>
+            <h2>Min Books</h2>
+            <input id="min-books-input" class="number-input" type="number" inputmode="numeric" min="0" step="1" />
+          </div>
+          <div>
+            <h2>Min Limit</h2>
+            <input id="min-limit-input" class="number-input" type="number" inputmode="numeric" min="0" step="50" />
+          </div>
+        </div>
+
+        <div class="field-block">
+          <div class="toggle-row">
+            <label for="is-main-toggle">Main Only <span style="color:var(--muted); font-weight:400;">(is_main:true)</span></label>
+            <span class="switch">
+              <input id="is-main-toggle" type="checkbox" />
+              <span class="switch-track" aria-hidden="true"></span>
+            </span>
+          </div>
+        </div>
+
+        <ul id="validation-list" class="validation-list" aria-live="polite"></ul>
+
+        <div class="reset-row">
+          <button id="reset-btn" class="btn" type="button">Reset to Defaults</button>
+        </div>
+      </section>
+    </main>
+
+    <div class="command-bar">
+      <div id="command-text" class="command-text" aria-live="polite">/run command_name:all</div>
+      <div class="command-actions">
+        <button id="copy-btn" class="btn primary copy-btn" type="button">Copy Command</button>
+        <button id="reset-btn-bar" class="btn reset-btn" type="button" onclick="document.getElementById('reset-btn').click()">Reset</button>
+      </div>
+    </div>
+
+    <footer class="app-footer">
+      EV Bot Command Builder &middot; runs entirely on your device
+    </footer>
+  </div>
+
+  <script src="./data/config.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>
