@@ -220,6 +220,16 @@ section[hidden] { display: none !important; }
   border-color: var(--chip-bg-selected);
 }
 
+.bulk-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.bulk-row .btn {
+  flex: 0 0 auto;
+}
+
 .market-list {
   display: flex;
   flex-direction: column;

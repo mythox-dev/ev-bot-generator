@@ -76,15 +76,35 @@
     return null;
   }
 
+  // Resolves a group's market list from its source (ALL_MARKETS sentinel,
+  // prefix filter over a family, or an explicit curated array), de-duplicating
+  // while preserving order. Explicit arrays are validated for membership in
+  // validateConfigAgainstReference(); prefix/ALL results are correct by
+  // construction since they're derived directly from the reference.
+  function resolveGroupMarkets(group, league) {
+    if (group.markets === CONFIG.ALL_MARKETS) {
+      return (MARKET_FAMILIES[league.marketFamily] || []).slice();
+    }
+    var sourceFamily = MARKET_FAMILIES[group.family || league.marketFamily] || [];
+    if (group.prefixes) {
+      return sourceFamily.filter(function (m) {
+        return group.prefixes.some(function (p) { return m.indexOf(p) === 0; });
+      });
+    }
+    var seen = new Set();
+    var result = [];
+    (group.markets || []).forEach(function (m) {
+      if (!seen.has(m)) { seen.add(m); result.push(m); }
+    });
+    return result;
+  }
+
   function currentMarketsList() {
     if (!state.league || !state.groupId) return null;
     var group = findGroup(state.league, state.groupId);
     if (!group) return null;
-    if (group.markets === CONFIG.ALL_MARKETS) {
-      var leagueObj = findLeague(state.league);
-      return MARKET_FAMILIES[leagueObj.marketFamily] || [];
-    }
-    return group.markets;
+    var leagueObj = findLeague(state.league);
+    return resolveGroupMarkets(group, leagueObj);
   }
 
   function orderedSelectedMarkets() {
@@ -107,9 +127,20 @@
     return ordered;
   }
 
-  // Dev-time sanity check: every configured market/book string must exist in the reference.
+  // Dev-time validation of the grouping config against the reference JSON.
+  // Checks (per the market-grouping spec):
+  //   1. every explicitly-grouped market exists verbatim in its source family
+  //   2. no group is empty
+  //   3. duplicate entries within a single group's authored list are caught
+  //   4. every league has an "All Markets" (ALL_MARKETS) fallback group
+  // A market appearing in multiple DIFFERENT groups is expected and is never
+  // flagged. Also produces a coverage report: source markets not reachable
+  // from any convenience group other than All Markets, per league and for
+  // the shared futures family.
   function validateConfigAgainstReference() {
     var problems = [];
+    var coverageReport = {};
+
     CONFIG.LEAGUES.forEach(function (league) {
       var family = MARKET_FAMILIES[league.marketFamily];
       if (!family) {
@@ -117,15 +148,53 @@
         return;
       }
       var groups = CONFIG.MARKET_GROUPS[league.id] || [];
+      var hasAllMarkets = false;
+      var covered = new Set();
+
       groups.forEach(function (group) {
-        if (group.markets === CONFIG.ALL_MARKETS) return;
-        group.markets.forEach(function (m) {
-          if (family.indexOf(m) === -1) {
-            problems.push('Market group "' + league.id + '/' + group.id + '" has unknown market "' + m + '"');
-          }
-        });
+        if (group.markets === CONFIG.ALL_MARKETS) {
+          hasAllMarkets = true;
+          return;
+        }
+
+        var sourceFamilyName = group.family || league.marketFamily;
+        var sourceFamily = MARKET_FAMILIES[sourceFamilyName] || [];
+        var resolved = resolveGroupMarkets(group, league);
+
+        if (resolved.length === 0) {
+          problems.push('Market group "' + league.id + '/' + group.id + '" resolves to zero markets');
+        }
+
+        if (group.markets && !group.prefixes) {
+          // explicit curated list: check membership + catch authoring duplicates
+          var seen = new Set();
+          group.markets.forEach(function (m) {
+            if (sourceFamily.indexOf(m) === -1) {
+              problems.push('Market group "' + league.id + '/' + group.id + '" has unknown market "' + m + '" (not in ' + sourceFamilyName + ')');
+            }
+            if (seen.has(m)) {
+              problems.push('Market group "' + league.id + '/' + group.id + '" has a duplicate entry: "' + m + '"');
+            }
+            seen.add(m);
+          });
+        }
+
+        // Only groups sourced from the league's OWN family count toward its
+        // "convenience coverage" — a Futures group pulls from a different
+        // family entirely and shouldn't mask gaps in the league's own list.
+        if (!group.family) {
+          resolved.forEach(function (m) { covered.add(m); });
+        }
       });
+
+      if (!hasAllMarkets) {
+        problems.push('League "' + league.id + '" has no All Markets fallback group');
+      }
+
+      var uncovered = family.filter(function (m) { return !covered.has(m); });
+      coverageReport[league.id] = uncovered;
     });
+
     CONFIG.PRESETS.forEach(function (preset) {
       var league = findLeague(preset.league);
       if (!league) { problems.push('Preset "' + preset.id + '" has unknown league "' + preset.league + '"'); return; }
@@ -136,6 +205,7 @@
         }
       });
     });
+
     var bookValues = BOOKS.map(function (b) { return b.value; });
     CONFIG.DEFAULTS.sharps.forEach(function (s) {
       if (bookValues.indexOf(s) === -1) problems.push('Default sharp "' + s + '" is not a known book token');
@@ -143,9 +213,23 @@
     if (bookValues.indexOf(CONFIG.DEFAULTS.book) === -1) {
       problems.push('Default book "' + CONFIG.DEFAULTS.book + '" is not a known book token');
     }
+
     if (problems.length) {
       console.warn('[EV Bot config] ' + problems.length + ' issue(s) found:\n' + problems.join('\n'));
     }
+
+    var coverageLines = [];
+    Object.keys(coverageReport).forEach(function (leagueId) {
+      var gaps = coverageReport[leagueId];
+      if (gaps.length) {
+        coverageLines.push(leagueId + ' (' + gaps.length + '): ' + gaps.join(', '));
+      }
+    });
+    if (coverageLines.length) {
+      console.info('[EV Bot config] Markets only reachable via All Markets (no convenience group):\n' + coverageLines.join('\n'));
+    }
+
+    return { problems: problems, coverageReport: coverageReport };
   }
 
   // ---------- Persistence ----------
@@ -460,6 +544,33 @@
       container.appendChild(hintEl('No markets available for this group.'));
       return;
     }
+
+    var bulkRow = document.createElement('div');
+    bulkRow.className = 'bulk-row';
+
+    var selectAllBtn = document.createElement('button');
+    selectAllBtn.type = 'button';
+    selectAllBtn.className = 'btn small ghost';
+    selectAllBtn.textContent = 'Select All';
+    selectAllBtn.addEventListener('click', function () {
+      list.forEach(function (m) { state.markets.add(m); });
+      renderMarkets();
+      updateCommand();
+    });
+
+    var clearAllBtn = document.createElement('button');
+    clearAllBtn.type = 'button';
+    clearAllBtn.className = 'btn small ghost';
+    clearAllBtn.textContent = 'Clear All';
+    clearAllBtn.addEventListener('click', function () {
+      list.forEach(function (m) { state.markets.delete(m); });
+      renderMarkets();
+      updateCommand();
+    });
+
+    bulkRow.appendChild(selectAllBtn);
+    bulkRow.appendChild(clearAllBtn);
+    container.appendChild(bulkRow);
 
     var wrap = document.createElement('div');
     wrap.className = 'market-list';
