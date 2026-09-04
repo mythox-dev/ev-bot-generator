@@ -18,7 +18,7 @@
 <body>
   <div id="app">
     <header class="app-header">
-      <h1>EV Bot Command Builder</h1>
+      <h1>EV Bot Builder</h1>
       <nav class="tabs" role="tablist" aria-label="Sections">
         <button id="tab-favorites" class="tab-btn" role="tab" aria-selected="true" aria-controls="panel-favorites" type="button">Favorites</button>
         <button id="tab-builder" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-builder" type="button">Builder</button>
@@ -33,76 +33,165 @@
       </section>
 
       <section id="panel-builder" role="tabpanel" aria-labelledby="tab-builder" hidden>
-        <div class="field-block">
-          <h2>League</h2>
+
+        <!-- Core -->
+        <div class="sec">
+          <div class="sec-title">League</div>
           <div id="league-chips" class="chip-row"></div>
+          <div class="bulk-row">
+            <button id="league-select-all" class="btn tiny ghost" type="button">Select All</button>
+            <button id="league-clear-all" class="btn tiny ghost" type="button">Clear All</button>
+          </div>
         </div>
 
-        <div class="field-block">
-          <h2>Market Group</h2>
-          <div id="group-chips" class="chip-row"></div>
+        <p id="market-section-hint" class="field-hint">Select one or more leagues to choose markets.</p>
+
+        <div id="market-group-block" class="sec" hidden>
+          <div class="sec-title">Market Group</div>
+          <select id="group-select" class="select-input"></select>
         </div>
 
-        <div class="field-block">
-          <h2>Markets</h2>
+        <div id="markets-block" class="sec" hidden>
+          <div class="sec-title">Markets</div>
           <div id="markets-container"></div>
         </div>
 
-        <div class="field-block">
-          <h2>Name Filter <span class="field-hint" style="display:inline;">(optional)</span></h2>
+        <div id="market-mode-block" class="sec" hidden>
+          <div class="sec-title">Market Selection <span class="sec-hint">(multi-league)</span></div>
+          <div id="market-mode-chips" class="chip-row"></div>
+        </div>
+
+        <div class="sec">
+          <div class="sec-title">Name <span class="sec-hint">optional</span></div>
           <input id="name-input" class="text-input" type="text" placeholder="e.g. Over" autocomplete="off" autocapitalize="off" spellcheck="false" />
         </div>
 
-        <div class="field-block">
-          <h2>Sharps</h2>
-          <div id="sharps-chips" class="chip-row"></div>
+        <!-- Scan Settings -->
+        <div class="sec-divider">Scan Settings</div>
+
+        <div class="sec">
+          <div class="sec-title">Sharps</div>
+          <div id="sharps-chips" class="chip-row compact"></div>
         </div>
 
-        <div class="field-block">
-          <h2>Target Book</h2>
-          <select id="book-select" class="select-input"></select>
+        <div class="sec">
+          <div class="sec-title">Target Books</div>
+          <div id="books-chips" class="chip-row compact"></div>
         </div>
 
-        <div class="field-block inline-fields">
+        <div class="sec pair-row">
           <div>
-            <h2>Min Books</h2>
+            <div class="sec-title">Min Books</div>
             <input id="min-books-input" class="number-input" type="number" inputmode="numeric" min="0" step="1" />
           </div>
           <div>
-            <h2>Min Limit</h2>
+            <div class="sec-title">Min Limit</div>
             <input id="min-limit-input" class="number-input" type="number" inputmode="numeric" min="0" step="50" />
           </div>
         </div>
 
-        <div class="field-block">
-          <div class="toggle-row">
-            <label for="is-main-toggle">Main Only <span style="color:var(--muted); font-weight:400;">(is_main:true)</span></label>
+        <div class="sec">
+          <div class="sec-title">Hours Till Event</div>
+          <input id="hours-input" class="number-input" type="number" inputmode="numeric" step="1" />
+          <p class="field-hint">Negative = further out than N hours. Default 18 (roughly "today").</p>
+        </div>
+
+        <!-- Optional Filters -->
+        <details id="filters-details" class="sec-details">
+          <summary>Filters</summary>
+
+          <div class="sec pair-row">
+            <div>
+              <div class="sec-title">Min EV %</div>
+              <input id="ev-min-input" class="number-input" type="number" inputmode="numeric" step="1" />
+            </div>
+            <div></div>
+          </div>
+
+          <div class="sec pair-row">
+            <div>
+              <div class="sec-title">Min Odds</div>
+              <input id="min-odds-input" class="number-input" type="number" inputmode="numeric" step="5" />
+            </div>
+            <div>
+              <div class="sec-title">Max Odds</div>
+              <input id="max-odds-input" class="number-input" type="number" inputmode="numeric" step="5" />
+            </div>
+          </div>
+
+          <div class="sec">
+            <div class="sec-title">Teams <span class="sec-hint">CSV</span></div>
+            <input id="teams-input" class="text-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </div>
+
+          <div class="sec">
+            <div class="sec-title">Players <span class="sec-hint">CSV</span></div>
+            <input id="players-input" class="text-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </div>
+
+          <div class="sec">
+            <div class="sec-title">Live Status</div>
+            <div id="live-segmented" class="segmented"></div>
+          </div>
+        </details>
+
+        <!-- Advanced -->
+        <details id="advanced-details" class="sec-details">
+          <summary>Advanced</summary>
+
+          <div class="sec">
+            <div class="sec-title">Boost %</div>
+            <input id="boost-input" class="number-input" type="number" inputmode="numeric" step="1" />
+          </div>
+
+          <div class="sec toggle-row">
+            <label for="is-main-toggle">Main Only</label>
             <span class="switch">
               <input id="is-main-toggle" type="checkbox" />
               <span class="switch-track" aria-hidden="true"></span>
             </span>
           </div>
-        </div>
+
+          <div class="sec toggle-row">
+            <label for="exclude-one-ways-toggle">Exclude One Ways</label>
+            <span class="switch">
+              <input id="exclude-one-ways-toggle" type="checkbox" />
+              <span class="switch-track" aria-hidden="true"></span>
+            </span>
+          </div>
+
+          <div class="sec pair-row">
+            <div>
+              <div class="sec-title">Devig Type</div>
+              <select id="devig-type-select" class="select-input">
+                <option value="">Inherited (Synth)</option>
+                <option value="synth">Synth</option>
+                <option value="avg">Avg</option>
+              </select>
+            </div>
+            <div>
+              <div class="sec-title">Devig Method</div>
+              <select id="devig-method-select" class="select-input">
+                <option value="">Inherited (Probit)</option>
+                <option value="probit">Probit</option>
+                <option value="power">Power</option>
+                <option value="wc">WC</option>
+              </select>
+            </div>
+          </div>
+        </details>
 
         <ul id="validation-list" class="validation-list" aria-live="polite"></ul>
-
-        <div class="reset-row">
-          <button id="reset-btn" class="btn" type="button">Reset to Defaults</button>
-        </div>
       </section>
     </main>
 
     <div class="command-bar">
-      <div id="command-text" class="command-text" aria-live="polite">/run command_name:all</div>
-      <div class="command-actions">
-        <button id="copy-btn" class="btn primary copy-btn" type="button">Copy Command</button>
-        <button id="reset-btn-bar" class="btn reset-btn" type="button" onclick="document.getElementById('reset-btn').click()">Reset</button>
+      <div class="command-row">
+        <div id="command-text" class="command-text" role="button" tabindex="0" aria-live="polite" aria-expanded="false">/run command_name:all</div>
+        <button id="copy-btn" class="btn primary copy-btn" type="button">COPY</button>
       </div>
+      <button id="reset-btn" class="btn ghost reset-btn" type="button">Reset</button>
     </div>
-
-    <footer class="app-footer">
-      EV Bot Command Builder &middot; runs entirely on your device
-    </footer>
   </div>
 
   <script src="./data/config.js"></script>

@@ -8,16 +8,44 @@
   var MARKET_FAMILIES = {};
   var BOOKS = []; // [{ canonical, value }]
 
+  var MARKET_MODES = [
+    { id: 'all', label: 'All Markets', value: 'all' },
+    { id: 'player', label: 'Player Props Only', value: 'player' },
+    { id: 'nonplayer', label: 'Non-Player Markets', value: '!player' }
+  ];
+
+  var LIVE_OPTIONS = [
+    { value: 'pregame', label: 'Pregame' },
+    { value: 'live', label: 'Live' },
+    { value: 'all', label: 'All' }
+  ];
+
+  // state.leagues: multi-select. In single-league mode, groupId/markets drive
+  // the detailed taxonomy from the market-grouping config. In multi-league
+  // mode, marketMode drives one of the bot's cross-sport selectors instead
+  // (all / player / !player) — the two are mutually exclusive by league count.
   var state = {
-    league: null,
+    leagues: [],
     groupId: null,
     markets: new Set(),
+    marketMode: null,
     name: '',
     sharps: new Set(CONFIG.DEFAULTS.sharps),
-    book: CONFIG.DEFAULTS.book,
+    books: new Set(CONFIG.DEFAULTS.books),
     minBooks: CONFIG.DEFAULTS.minBooks,
     minLimit: CONFIG.DEFAULTS.minLimit,
-    isMain: false
+    hoursTillEvent: CONFIG.DEFAULTS.hoursTillEvent,
+    evMin: '',
+    minOdds: '',
+    maxOdds: '',
+    teams: '',
+    players: '',
+    live: '',
+    boostPercentage: '',
+    isMain: false,
+    excludeOneWays: false,
+    devigType: '',   // '' = inherited from the saved `all` command (synth)
+    devigMethod: ''  // '' = inherited from the saved `all` command (probit)
   };
 
   var els = {};
@@ -30,20 +58,45 @@
     els.panelFavorites = $('panel-favorites');
     els.panelBuilder = $('panel-builder');
     els.favoritesList = $('favorites-list');
+    els.fatalError = $('fatal-error');
+
     els.leagueChips = $('league-chips');
-    els.groupChips = $('group-chips');
+    els.leagueSelectAll = $('league-select-all');
+    els.leagueClearAll = $('league-clear-all');
+    els.marketSectionHint = $('market-section-hint');
+    els.marketGroupBlock = $('market-group-block');
+    els.groupSelect = $('group-select');
+    els.marketsBlock = $('markets-block');
     els.marketsContainer = $('markets-container');
+    els.marketModeBlock = $('market-mode-block');
+    els.marketModeChips = $('market-mode-chips');
     els.nameInput = $('name-input');
+
     els.sharpsChips = $('sharps-chips');
-    els.bookSelect = $('book-select');
+    els.booksChips = $('books-chips');
     els.minBooksInput = $('min-books-input');
     els.minLimitInput = $('min-limit-input');
+    els.hoursInput = $('hours-input');
+
+    els.filtersDetails = $('filters-details');
+    els.evMinInput = $('ev-min-input');
+    els.minOddsInput = $('min-odds-input');
+    els.maxOddsInput = $('max-odds-input');
+    els.teamsInput = $('teams-input');
+    els.playersInput = $('players-input');
+    els.liveSegmented = $('live-segmented');
+
+    els.advancedDetails = $('advanced-details');
+    els.boostInput = $('boost-input');
     els.isMainToggle = $('is-main-toggle');
+    els.excludeOneWaysToggle = $('exclude-one-ways-toggle');
+    els.devigTypeSelect = $('devig-type-select');
+    els.devigMethodSelect = $('devig-method-select');
+
     els.validationList = $('validation-list');
-    els.resetBtn = $('reset-btn');
     els.commandText = $('command-text');
     els.copyBtn = $('copy-btn');
-    els.fatalError = $('fatal-error');
+    els.resetBtn = $('reset-btn');
   }
 
   // ---------- Reference / book helpers ----------
@@ -100,10 +153,10 @@
   }
 
   function currentMarketsList() {
-    if (!state.league || !state.groupId) return null;
-    var group = findGroup(state.league, state.groupId);
+    if (state.leagues.length !== 1 || !state.groupId) return null;
+    var group = findGroup(state.leagues[0], state.groupId);
     if (!group) return null;
-    var leagueObj = findLeague(state.league);
+    var leagueObj = findLeague(state.leagues[0]);
     return resolveGroupMarkets(group, leagueObj);
   }
 
@@ -113,18 +166,44 @@
     return Array.from(state.markets);
   }
 
-  function orderedSelectedSharps() {
-    // Keep the canonical default order (pinny,circa,bm,novig) first when those
-    // are selected, then append any other selected books in reference order.
+  // Keeps a canonical default order first (when those items are selected),
+  // then appends any other selections in reference/config order. Used for
+  // sharps, books, and leagues so output is stable regardless of click order.
+  function orderedBySet(selectedSet, canonicalOrder, fallbackOrder) {
     var ordered = [];
     var seen = new Set();
-    CONFIG.DEFAULTS.sharps.forEach(function (v) {
-      if (state.sharps.has(v)) { ordered.push(v); seen.add(v); }
+    canonicalOrder.forEach(function (v) {
+      if (selectedSet.has(v)) { ordered.push(v); seen.add(v); }
     });
-    BOOKS.forEach(function (b) {
-      if (state.sharps.has(b.value) && !seen.has(b.value)) { ordered.push(b.value); seen.add(b.value); }
+    fallbackOrder.forEach(function (v) {
+      if (selectedSet.has(v) && !seen.has(v)) { ordered.push(v); seen.add(v); }
     });
     return ordered;
+  }
+
+  function orderedSelectedSharps() {
+    return orderedBySet(state.sharps, CONFIG.DEFAULTS.sharps, BOOKS.map(function (b) { return b.value; }));
+  }
+
+  function orderedSelectedBooks() {
+    return orderedBySet(state.books, CONFIG.DEFAULTS.books, BOOKS.map(function (b) { return b.value; }));
+  }
+
+  function orderedSelectedLeagues() {
+    var leagueIds = CONFIG.LEAGUES.map(function (l) { return l.id; });
+    return orderedBySet(new Set(state.leagues), leagueIds, leagueIds);
+  }
+
+  // Resolves the `markets:` param value as a ready-to-use string: a CSV list
+  // of exact market strings in single-league mode, or one of the bot's
+  // cross-sport selectors (all / player / !player) in multi-league mode.
+  function resolveMarketsParam() {
+    if (state.leagues.length > 1) {
+      var mode = MARKET_MODES.filter(function (m) { return m.id === state.marketMode; })[0];
+      return mode ? mode.value : '';
+    }
+    var list = orderedSelectedMarkets();
+    return list.length ? list.join(',') : '';
   }
 
   // Dev-time validation of the grouping config against the reference JSON.
@@ -166,7 +245,6 @@
         }
 
         if (group.markets && !group.prefixes) {
-          // explicit curated list: check membership + catch authoring duplicates
           var seen = new Set();
           group.markets.forEach(function (m) {
             if (sourceFamily.indexOf(m) === -1) {
@@ -179,9 +257,6 @@
           });
         }
 
-        // Only groups sourced from the league's OWN family count toward its
-        // "convenience coverage" — a Futures group pulls from a different
-        // family entirely and shouldn't mask gaps in the league's own list.
         if (!group.family) {
           resolved.forEach(function (m) { covered.add(m); });
         }
@@ -191,8 +266,7 @@
         problems.push('League "' + league.id + '" has no All Markets fallback group');
       }
 
-      var uncovered = family.filter(function (m) { return !covered.has(m); });
-      coverageReport[league.id] = uncovered;
+      coverageReport[league.id] = family.filter(function (m) { return !covered.has(m); });
     });
 
     CONFIG.PRESETS.forEach(function (preset) {
@@ -210,9 +284,9 @@
     CONFIG.DEFAULTS.sharps.forEach(function (s) {
       if (bookValues.indexOf(s) === -1) problems.push('Default sharp "' + s + '" is not a known book token');
     });
-    if (bookValues.indexOf(CONFIG.DEFAULTS.book) === -1) {
-      problems.push('Default book "' + CONFIG.DEFAULTS.book + '" is not a known book token');
-    }
+    CONFIG.DEFAULTS.books.forEach(function (b) {
+      if (bookValues.indexOf(b) === -1) problems.push('Default book "' + b + '" is not a known book token');
+    });
 
     if (problems.length) {
       console.warn('[EV Bot config] ' + problems.length + ' issue(s) found:\n' + problems.join('\n'));
@@ -221,9 +295,7 @@
     var coverageLines = [];
     Object.keys(coverageReport).forEach(function (leagueId) {
       var gaps = coverageReport[leagueId];
-      if (gaps.length) {
-        coverageLines.push(leagueId + ' (' + gaps.length + '): ' + gaps.join(', '));
-      }
+      if (gaps.length) coverageLines.push(leagueId + ' (' + gaps.length + '): ' + gaps.join(', '));
     });
     if (coverageLines.length) {
       console.info('[EV Bot config] Markets only reachable via All Markets (no convenience group):\n' + coverageLines.join('\n'));
@@ -233,17 +305,25 @@
   }
 
   // ---------- Persistence ----------
+  // Only durable, low-friction preferences are persisted (last leagues,
+  // sharps, books, thresholds, hours). Ephemeral per-scan state — the
+  // selected market group, exact markets, and one-off filters — is never
+  // persisted, and a preset's canonical config is never rewritten by
+  // Builder edits; see resetBuilder()/loadPresetIntoBuilder() below.
 
   function loadPrefs() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       var prefs = JSON.parse(raw);
-      if (prefs.league && findLeague(prefs.league)) state.league = prefs.league;
-      if (prefs.book) state.book = prefs.book;
+      if (Array.isArray(prefs.leagues)) {
+        state.leagues = prefs.leagues.filter(function (id) { return !!findLeague(id); });
+      }
       if (Array.isArray(prefs.sharps) && prefs.sharps.length) state.sharps = new Set(prefs.sharps);
+      if (Array.isArray(prefs.books) && prefs.books.length) state.books = new Set(prefs.books);
       if (typeof prefs.minBooks === 'number') state.minBooks = prefs.minBooks;
       if (typeof prefs.minLimit === 'number') state.minLimit = prefs.minLimit;
+      if (typeof prefs.hoursTillEvent === 'number') state.hoursTillEvent = prefs.hoursTillEvent;
     } catch (e) {
       // ignore corrupt/blocked storage
     }
@@ -252,11 +332,12 @@
   function savePrefs() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        league: state.league,
-        book: state.book,
+        leagues: state.leagues,
         sharps: Array.from(state.sharps),
+        books: Array.from(state.books),
         minBooks: state.minBooks,
-        minLimit: state.minLimit
+        minLimit: state.minLimit,
+        hoursTillEvent: state.hoursTillEvent
       }));
     } catch (e) {
       // ignore
@@ -265,51 +346,94 @@
 
   // ---------- Command generation ----------
 
+  function notEmpty(v) { return v !== '' && v !== null && v !== undefined; }
+
+  // Parameter order per spec: leagues, sharps, markets, books, name,
+  // min_books, min_limit, ev_min, min_odds, max_odds, teams, players, live,
+  // hours_till_event, boost_percentage, devig_type, devig_method, is_main,
+  // exclude_one_ways. Every optional field is simply omitted when unset —
+  // never emitted as an empty `field:` token.
   function generateCommand(s) {
     var parts = ['/run command_name:all'];
-    if (s.league) parts.push('leagues:' + s.league);
+    if (s.leagues && s.leagues.length) parts.push('leagues:' + s.leagues.join(','));
     if (s.sharps && s.sharps.length) parts.push('sharps:' + s.sharps.join(','));
-    if (s.markets && s.markets.length) parts.push('markets:' + s.markets.join(','));
-    if (s.book) parts.push('books:' + s.book);
+    if (s.markets) parts.push('markets:' + s.markets);
+    if (s.books && s.books.length) parts.push('books:' + s.books.join(','));
     if (s.name && String(s.name).trim()) parts.push('name:' + String(s.name).trim());
-    if (s.minBooks !== '' && s.minBooks !== null && s.minBooks !== undefined) parts.push('min_books:' + s.minBooks);
-    if (s.minLimit !== '' && s.minLimit !== null && s.minLimit !== undefined) parts.push('min_limit:' + s.minLimit);
+    if (notEmpty(s.minBooks)) parts.push('min_books:' + s.minBooks);
+    if (notEmpty(s.minLimit)) parts.push('min_limit:' + s.minLimit);
+    if (notEmpty(s.evMin)) parts.push('ev_min:' + s.evMin);
+    if (notEmpty(s.minOdds)) parts.push('min_odds:' + s.minOdds);
+    if (notEmpty(s.maxOdds)) parts.push('max_odds:' + s.maxOdds);
+    if (s.teams && String(s.teams).trim()) parts.push('teams:' + String(s.teams).trim());
+    if (s.players && String(s.players).trim()) parts.push('players:' + String(s.players).trim());
+    if (s.live) parts.push('live:' + s.live);
+    if (notEmpty(s.hoursTillEvent)) parts.push('hours_till_event:' + s.hoursTillEvent);
+    if (notEmpty(s.boostPercentage)) parts.push('boost_percentage:' + s.boostPercentage);
+    if (s.devigType) parts.push('devig_type:' + s.devigType);
+    if (s.devigMethod) parts.push('devig_method:' + s.devigMethod);
     if (s.isMain) parts.push('is_main:true');
+    if (s.excludeOneWays) parts.push('exclude_one_ways:true');
     return parts.join(' ');
   }
 
   function currentCommandState() {
     return {
-      league: state.league,
+      leagues: orderedSelectedLeagues(),
       sharps: orderedSelectedSharps(),
-      markets: orderedSelectedMarkets(),
-      book: state.book,
+      markets: resolveMarketsParam(),
+      books: orderedSelectedBooks(),
       name: state.name,
       minBooks: state.minBooks,
       minLimit: state.minLimit,
-      isMain: state.isMain
+      evMin: state.evMin,
+      minOdds: state.minOdds,
+      maxOdds: state.maxOdds,
+      teams: state.teams,
+      players: state.players,
+      live: state.live,
+      hoursTillEvent: state.hoursTillEvent,
+      boostPercentage: state.boostPercentage,
+      devigType: state.devigType,
+      devigMethod: state.devigMethod,
+      isMain: state.isMain,
+      excludeOneWays: state.excludeOneWays
     };
   }
 
+  // Every standard preset explicitly uses the application defaults (sharps,
+  // books, min_books, min_limit, hours_till_event) unless it overrides one —
+  // it never relies on the saved `all` command's own broad inherited config.
   function presetCommandState(preset) {
     return {
-      league: preset.league,
+      leagues: [preset.league],
       sharps: preset.sharps || CONFIG.DEFAULTS.sharps,
-      markets: preset.markets,
-      book: preset.book || CONFIG.DEFAULTS.book,
+      markets: (preset.markets || []).join(','),
+      books: preset.books || CONFIG.DEFAULTS.books,
       name: preset.name || '',
       minBooks: preset.minBooks != null ? preset.minBooks : CONFIG.DEFAULTS.minBooks,
       minLimit: preset.minLimit != null ? preset.minLimit : CONFIG.DEFAULTS.minLimit,
-      isMain: !!preset.isMain
+      evMin: preset.evMin || '',
+      minOdds: preset.minOdds != null ? preset.minOdds : '',
+      maxOdds: preset.maxOdds != null ? preset.maxOdds : '',
+      teams: preset.teams || '',
+      players: preset.players || '',
+      live: preset.live || '',
+      hoursTillEvent: preset.hoursTillEvent != null ? preset.hoursTillEvent : CONFIG.DEFAULTS.hoursTillEvent,
+      boostPercentage: preset.boostPercentage != null ? preset.boostPercentage : '',
+      devigType: preset.devigType || '',
+      devigMethod: preset.devigMethod || '',
+      isMain: !!preset.isMain,
+      excludeOneWays: !!preset.excludeOneWays
     };
   }
 
   function validate(s) {
     var issues = [];
-    if (!s.league) issues.push('Select a league.');
-    if (!s.markets || !s.markets.length) issues.push('Select at least one market.');
+    if (!s.leagues || !s.leagues.length) issues.push('Select at least one league.');
+    if (!s.markets) issues.push('Select markets (or a market mode for multi-league scans).');
     if (!s.sharps || !s.sharps.length) issues.push('Select at least one sharp book.');
-    if (!s.book) issues.push('Select a target book.');
+    if (!s.books || !s.books.length) issues.push('Select at least one target book.');
     return issues;
   }
 
@@ -358,7 +482,7 @@
     if (!isFav) window.scrollTo(0, 0);
   }
 
-  // ---------- Rendering: favorites ----------
+  // ---------- Rendering: favorites (compact rows, collapsible per league) ----------
 
   function renderFavorites() {
     els.favoritesList.innerHTML = '';
@@ -366,90 +490,93 @@
       var presets = CONFIG.PRESETS.filter(function (p) { return p.league === league.id; });
       if (!presets.length) return;
 
-      var group = document.createElement('section');
-      group.className = 'league-group';
+      var details = document.createElement('details');
+      details.className = 'league-section';
+      details.open = true;
 
-      var heading = document.createElement('h2');
-      heading.textContent = league.label;
-      group.appendChild(heading);
+      var summary = document.createElement('summary');
+      summary.textContent = league.label + ' (' + presets.length + ')';
+      details.appendChild(summary);
 
-      presets.forEach(function (preset) {
-        group.appendChild(buildPresetCard(preset));
-      });
+      var rows = document.createElement('div');
+      rows.className = 'preset-rows';
+      presets.forEach(function (preset) { rows.appendChild(buildPresetRow(preset)); });
+      details.appendChild(rows);
 
-      els.favoritesList.appendChild(group);
+      els.favoritesList.appendChild(details);
     });
   }
 
-  function buildPresetCard(preset) {
-    var card = document.createElement('div');
-    card.className = 'preset-card';
+  function buildPresetRow(preset) {
+    var row = document.createElement('div');
+    row.className = 'preset-row';
+    if (preset.description) row.title = preset.description;
 
-    var title = document.createElement('div');
-    title.className = 'preset-card-title';
-    title.textContent = preset.label;
-    card.appendChild(title);
-
-    if (preset.description) {
-      var desc = document.createElement('div');
-      desc.className = 'preset-card-desc';
-      desc.textContent = preset.description;
-      card.appendChild(desc);
-    }
+    var label = document.createElement('span');
+    label.className = 'preset-row-label';
+    label.textContent = preset.label;
+    row.appendChild(label);
 
     var actions = document.createElement('div');
-    actions.className = 'preset-card-actions';
+    actions.className = 'preset-row-actions';
 
     var copyBtn = document.createElement('button');
     copyBtn.type = 'button';
-    copyBtn.className = 'btn small';
+    copyBtn.className = 'btn tiny';
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', function () {
       var cmd = generateCommand(presetCommandState(preset));
       copyToClipboard(cmd).then(function () {
         flashCopied(copyBtn, 'Copy');
       }).catch(function () {
-        copyBtn.textContent = 'Copy failed';
+        copyBtn.textContent = 'Failed';
         setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1400);
       });
     });
 
     var editBtn = document.createElement('button');
     editBtn.type = 'button';
-    editBtn.className = 'btn small primary';
+    editBtn.className = 'btn tiny primary';
     editBtn.textContent = 'Edit';
-    editBtn.addEventListener('click', function () {
-      loadPresetIntoBuilder(preset);
-    });
+    editBtn.addEventListener('click', function () { loadPresetIntoBuilder(preset); });
 
     actions.appendChild(copyBtn);
     actions.appendChild(editBtn);
-    card.appendChild(actions);
+    row.appendChild(actions);
 
-    return card;
+    return row;
   }
 
   function loadPresetIntoBuilder(preset) {
-    state.league = preset.league;
+    state.leagues = [preset.league];
     state.groupId = 'custom';
     state.markets = new Set(preset.markets);
+    state.marketMode = null;
     state.name = preset.name || '';
     state.sharps = new Set(preset.sharps || CONFIG.DEFAULTS.sharps);
-    state.book = preset.book || CONFIG.DEFAULTS.book;
+    state.books = new Set(preset.books || CONFIG.DEFAULTS.books);
     state.minBooks = preset.minBooks != null ? preset.minBooks : CONFIG.DEFAULTS.minBooks;
     state.minLimit = preset.minLimit != null ? preset.minLimit : CONFIG.DEFAULTS.minLimit;
+    state.hoursTillEvent = preset.hoursTillEvent != null ? preset.hoursTillEvent : CONFIG.DEFAULTS.hoursTillEvent;
+    state.evMin = preset.evMin || '';
+    state.minOdds = preset.minOdds != null ? preset.minOdds : '';
+    state.maxOdds = preset.maxOdds != null ? preset.maxOdds : '';
+    state.teams = preset.teams || '';
+    state.players = preset.players || '';
+    state.live = preset.live || '';
+    state.boostPercentage = preset.boostPercentage != null ? preset.boostPercentage : '';
+    state.devigType = preset.devigType || '';
+    state.devigMethod = preset.devigMethod || '';
     state.isMain = !!preset.isMain;
+    state.excludeOneWays = !!preset.excludeOneWays;
 
     switchTab('builder');
     renderLeagueChips();
-    renderGroupChips();
-    renderMarkets();
+    renderMarketSection();
     els.nameInput.value = state.name;
     renderSharpsChips();
-    els.bookSelect.value = state.book;
-    els.minBooksInput.value = state.minBooks;
-    els.minLimitInput.value = state.minLimit;
-    els.isMainToggle.checked = state.isMain;
+    renderBooksChips();
+    syncScalarInputs();
     updateCommand();
     savePrefs();
   }
@@ -463,61 +590,98 @@
     return p;
   }
 
-  function makeChip(label, pressed, onClick) {
+  function makeChip(label, pressed, onClick, title) {
     var chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'chip';
     chip.setAttribute('aria-pressed', String(pressed));
     chip.textContent = label;
+    if (title) chip.title = title;
     chip.addEventListener('click', onClick);
     return chip;
   }
 
+  // ----- League (multi-select) -----
+
   function renderLeagueChips() {
     els.leagueChips.innerHTML = '';
     CONFIG.LEAGUES.forEach(function (league) {
-      var chip = makeChip(league.label, state.league === league.id, function () {
-        selectLeague(league.id);
-      });
+      var selected = state.leagues.indexOf(league.id) !== -1;
+      var chip = makeChip(league.label, selected, function () { toggleLeague(league.id); });
       els.leagueChips.appendChild(chip);
     });
   }
 
-  function selectLeague(id) {
-    if (state.league === id) return;
-    state.league = id;
+  function onLeaguesChanged() {
     state.groupId = null;
     state.markets = new Set();
+    state.marketMode = null;
     state.name = '';
     renderLeagueChips();
-    renderGroupChips();
-    renderMarkets();
+    renderMarketSection();
     els.nameInput.value = state.name;
     updateCommand();
     savePrefs();
   }
 
-  function renderGroupChips() {
-    els.groupChips.innerHTML = '';
-    if (!state.league) {
-      els.groupChips.appendChild(hintEl('Select a league first.'));
-      return;
+  function toggleLeague(id) {
+    var idx = state.leagues.indexOf(id);
+    if (idx === -1) state.leagues.push(id); else state.leagues.splice(idx, 1);
+    onLeaguesChanged();
+  }
+
+  function selectAllLeagues() {
+    state.leagues = CONFIG.LEAGUES.map(function (l) { return l.id; });
+    onLeaguesChanged();
+  }
+
+  function clearAllLeagues() {
+    state.leagues = [];
+    onLeaguesChanged();
+  }
+
+  // ----- Market section: single-league detailed taxonomy vs multi-league mode -----
+
+  function renderMarketSection() {
+    var count = state.leagues.length;
+    els.marketSectionHint.hidden = count > 0;
+    els.marketGroupBlock.hidden = count !== 1;
+    els.marketsBlock.hidden = count !== 1;
+    els.marketModeBlock.hidden = count <= 1;
+
+    if (count === 1) {
+      renderGroupSelect();
+      renderMarkets();
+    } else if (count > 1) {
+      renderMarketModeChips();
     }
-    var groups = CONFIG.MARKET_GROUPS[state.league] || [];
+  }
+
+  function renderGroupSelect() {
+    var leagueId = state.leagues[0];
+    var groups = CONFIG.MARKET_GROUPS[leagueId] || [];
+    els.groupSelect.innerHTML = '';
+
+    var placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select a market group…';
+    els.groupSelect.appendChild(placeholder);
+
     groups.forEach(function (group) {
-      var chip = makeChip(group.label, state.groupId === group.id, function () {
-        selectGroup(group.id);
-      });
-      els.groupChips.appendChild(chip);
+      var opt = document.createElement('option');
+      opt.value = group.id;
+      opt.textContent = group.label;
+      els.groupSelect.appendChild(opt);
     });
+
+    els.groupSelect.value = state.groupId || '';
   }
 
   function selectGroup(groupId) {
-    state.groupId = groupId;
+    state.groupId = groupId || null;
     state.markets = new Set();
-    var group = findGroup(state.league, groupId);
+    var group = groupId ? findGroup(state.leagues[0], groupId) : null;
     state.name = (group && group.defaultName) ? group.defaultName : '';
-    renderGroupChips();
     renderMarkets();
     els.nameInput.value = state.name;
     updateCommand();
@@ -531,10 +695,6 @@
     var container = els.marketsContainer;
     container.innerHTML = '';
 
-    if (!state.league) {
-      container.appendChild(hintEl('Select a league first.'));
-      return;
-    }
     if (!state.groupId) {
       container.appendChild(hintEl('Select a market group above.'));
       return;
@@ -550,7 +710,7 @@
 
     var selectAllBtn = document.createElement('button');
     selectAllBtn.type = 'button';
-    selectAllBtn.className = 'btn small ghost';
+    selectAllBtn.className = 'btn tiny ghost';
     selectAllBtn.textContent = 'Select All';
     selectAllBtn.addEventListener('click', function () {
       list.forEach(function (m) { state.markets.add(m); });
@@ -560,7 +720,7 @@
 
     var clearAllBtn = document.createElement('button');
     clearAllBtn.type = 'button';
-    clearAllBtn.className = 'btn small ghost';
+    clearAllBtn.className = 'btn tiny ghost';
     clearAllBtn.textContent = 'Clear All';
     clearAllBtn.addEventListener('click', function () {
       list.forEach(function (m) { state.markets.delete(m); });
@@ -601,29 +761,103 @@
     container.appendChild(wrap);
   }
 
+  function renderMarketModeChips() {
+    els.marketModeChips.innerHTML = '';
+    MARKET_MODES.forEach(function (mode) {
+      var chip = makeChip(mode.label, state.marketMode === mode.id, function () {
+        state.marketMode = state.marketMode === mode.id ? null : mode.id;
+        renderMarketModeChips();
+        updateCommand();
+      });
+      els.marketModeChips.appendChild(chip);
+    });
+  }
+
+  // ----- Sharps / Books (compact multi-select chips, abbreviated labels) -----
+
   function renderSharpsChips() {
     els.sharpsChips.innerHTML = '';
     BOOKS.forEach(function (book) {
-      var chip = makeChip(book.canonical, state.sharps.has(book.value), function () {
+      var chip = makeChip(book.value.toUpperCase(), state.sharps.has(book.value), function () {
         if (state.sharps.has(book.value)) state.sharps.delete(book.value);
         else state.sharps.add(book.value);
         chip.setAttribute('aria-pressed', String(state.sharps.has(book.value)));
         updateCommand();
         savePrefs();
-      });
+      }, book.canonical);
       els.sharpsChips.appendChild(chip);
     });
   }
 
-  function renderBookSelect() {
-    els.bookSelect.innerHTML = '';
+  function renderBooksChips() {
+    els.booksChips.innerHTML = '';
     BOOKS.forEach(function (book) {
-      var opt = document.createElement('option');
-      opt.value = book.value;
-      opt.textContent = book.canonical;
-      els.bookSelect.appendChild(opt);
+      var chip = makeChip(book.value.toUpperCase(), state.books.has(book.value), function () {
+        if (state.books.has(book.value)) state.books.delete(book.value);
+        else state.books.add(book.value);
+        chip.setAttribute('aria-pressed', String(state.books.has(book.value)));
+        updateCommand();
+        savePrefs();
+      }, book.canonical);
+      els.booksChips.appendChild(chip);
     });
-    els.bookSelect.value = state.book;
+  }
+
+  // ----- Live segmented control (tri-state, tap again to clear) -----
+
+  function renderLiveSegmented() {
+    els.liveSegmented.innerHTML = '';
+    LIVE_OPTIONS.forEach(function (opt) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'segment';
+      btn.setAttribute('aria-pressed', String(state.live === opt.value));
+      btn.textContent = opt.label;
+      btn.addEventListener('click', function () {
+        state.live = state.live === opt.value ? '' : opt.value;
+        renderLiveSegmented();
+        updateCommand();
+      });
+      els.liveSegmented.appendChild(btn);
+    });
+  }
+
+  // ----- Scalar field <-> state sync (used by init/reset/preset-load) -----
+
+  function syncScalarInputs() {
+    els.minBooksInput.value = state.minBooks;
+    els.minLimitInput.value = state.minLimit;
+    els.hoursInput.value = state.hoursTillEvent;
+    els.evMinInput.value = state.evMin;
+    els.minOddsInput.value = state.minOdds;
+    els.maxOddsInput.value = state.maxOdds;
+    els.teamsInput.value = state.teams;
+    els.playersInput.value = state.players;
+    els.boostInput.value = state.boostPercentage;
+    els.devigTypeSelect.value = state.devigType;
+    els.devigMethodSelect.value = state.devigMethod;
+    els.isMainToggle.checked = state.isMain;
+    els.excludeOneWaysToggle.checked = state.excludeOneWays;
+    renderLiveSegmented();
+  }
+
+  function bindNumberField(el, key, opts) {
+    opts = opts || {};
+    el.addEventListener('input', function () {
+      var raw = el.value;
+      if (raw === '' || raw === '-') { state[key] = ''; updateCommand(); if (opts.persist) savePrefs(); return; }
+      var n = parseInt(raw, 10);
+      if (isNaN(n)) { state[key] = ''; } else { state[key] = opts.allowNegative ? n : Math.max(0, n); }
+      updateCommand();
+      if (opts.persist) savePrefs();
+    });
+  }
+
+  function bindTextField(el, key) {
+    el.addEventListener('input', function () {
+      state[key] = el.value;
+      updateCommand();
+    });
   }
 
   function renderValidation() {
@@ -645,25 +879,34 @@
   }
 
   function resetBuilder() {
-    state.league = null;
+    state.leagues = [];
     state.groupId = null;
     state.markets = new Set();
+    state.marketMode = null;
     state.name = '';
     state.sharps = new Set(CONFIG.DEFAULTS.sharps);
-    state.book = CONFIG.DEFAULTS.book;
+    state.books = new Set(CONFIG.DEFAULTS.books);
     state.minBooks = CONFIG.DEFAULTS.minBooks;
     state.minLimit = CONFIG.DEFAULTS.minLimit;
+    state.hoursTillEvent = CONFIG.DEFAULTS.hoursTillEvent;
+    state.evMin = '';
+    state.minOdds = '';
+    state.maxOdds = '';
+    state.teams = '';
+    state.players = '';
+    state.live = '';
+    state.boostPercentage = '';
+    state.devigType = '';
+    state.devigMethod = '';
     state.isMain = false;
+    state.excludeOneWays = false;
 
     renderLeagueChips();
-    renderGroupChips();
-    renderMarkets();
+    renderMarketSection();
     els.nameInput.value = '';
     renderSharpsChips();
-    els.bookSelect.value = state.book;
-    els.minBooksInput.value = state.minBooks;
-    els.minLimitInput.value = state.minLimit;
-    els.isMainToggle.checked = false;
+    renderBooksChips();
+    syncScalarInputs();
     updateCommand();
     savePrefs();
   }
@@ -674,34 +917,50 @@
     els.tabFavorites.addEventListener('click', function () { switchTab('favorites'); });
     els.tabBuilder.addEventListener('click', function () { switchTab('builder'); });
 
+    els.leagueSelectAll.addEventListener('click', selectAllLeagues);
+    els.leagueClearAll.addEventListener('click', clearAllLeagues);
+
+    els.groupSelect.addEventListener('change', function () { selectGroup(els.groupSelect.value); });
+
     els.nameInput.addEventListener('input', function () {
       state.name = els.nameInput.value;
       updateCommand();
     });
 
-    els.bookSelect.addEventListener('change', function () {
-      state.book = els.bookSelect.value;
-      updateCommand();
-      savePrefs();
-    });
+    bindNumberField(els.minBooksInput, 'minBooks', { persist: true });
+    bindNumberField(els.minLimitInput, 'minLimit', { persist: true });
+    bindNumberField(els.hoursInput, 'hoursTillEvent', { allowNegative: true, persist: true });
+    bindNumberField(els.evMinInput, 'evMin', {});
+    bindNumberField(els.minOddsInput, 'minOdds', { allowNegative: true });
+    bindNumberField(els.maxOddsInput, 'maxOdds', { allowNegative: true });
+    bindNumberField(els.boostInput, 'boostPercentage', {});
+    bindTextField(els.teamsInput, 'teams');
+    bindTextField(els.playersInput, 'players');
 
-    els.minBooksInput.addEventListener('input', function () {
-      var v = els.minBooksInput.value;
-      state.minBooks = v === '' ? '' : Math.max(0, parseInt(v, 10) || 0);
+    els.devigTypeSelect.addEventListener('change', function () {
+      state.devigType = els.devigTypeSelect.value;
       updateCommand();
-      savePrefs();
     });
-
-    els.minLimitInput.addEventListener('input', function () {
-      var v = els.minLimitInput.value;
-      state.minLimit = v === '' ? '' : Math.max(0, parseInt(v, 10) || 0);
+    els.devigMethodSelect.addEventListener('change', function () {
+      state.devigMethod = els.devigMethodSelect.value;
       updateCommand();
-      savePrefs();
     });
 
     els.isMainToggle.addEventListener('change', function () {
       state.isMain = els.isMainToggle.checked;
       updateCommand();
+    });
+    els.excludeOneWaysToggle.addEventListener('change', function () {
+      state.excludeOneWays = els.excludeOneWaysToggle.checked;
+      updateCommand();
+    });
+
+    els.commandText.addEventListener('click', function () {
+      var expanded = els.commandText.classList.toggle('expanded');
+      els.commandText.setAttribute('aria-expanded', String(expanded));
+    });
+    els.commandText.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); els.commandText.click(); }
     });
 
     els.resetBtn.addEventListener('click', resetBuilder);
@@ -709,10 +968,10 @@
     els.copyBtn.addEventListener('click', function () {
       var cmd = generateCommand(currentCommandState());
       copyToClipboard(cmd).then(function () {
-        flashCopied(els.copyBtn, 'Copy Command');
+        flashCopied(els.copyBtn, 'COPY');
       }).catch(function () {
-        els.copyBtn.textContent = 'Copy failed';
-        setTimeout(function () { els.copyBtn.textContent = 'Copy Command'; }, 1400);
+        els.copyBtn.textContent = 'FAILED';
+        setTimeout(function () { els.copyBtn.textContent = 'COPY'; }, 1400);
       });
     });
   }
@@ -743,14 +1002,11 @@
 
         renderFavorites();
         renderLeagueChips();
-        renderGroupChips();
-        renderMarkets();
+        renderMarketSection();
         els.nameInput.value = state.name;
         renderSharpsChips();
-        renderBookSelect();
-        els.minBooksInput.value = state.minBooks;
-        els.minLimitInput.value = state.minLimit;
-        els.isMainToggle.checked = state.isMain;
+        renderBooksChips();
+        syncScalarInputs();
         updateCommand();
 
         switchTab('favorites');

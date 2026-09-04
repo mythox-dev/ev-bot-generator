@@ -174,12 +174,70 @@ window.EV_CONFIG = (function () {
     'DK Pick6': 'p6'
   };
 
+  // The pre-existing saved EV command this app builds runtime overrides for.
+  // Its own broad config (markets:all, books:all, hours_till_event:999, ...)
+  // is intentionally never modified by this app — see PARAM_SCHEMA below for
+  // which fields the app explicitly overrides vs. leaves inherited.
+  var SAVED_ALL_COMMAND = {
+    name: 'all',
+    type: 'EV',
+    sharps: 'broad/all-purpose list',
+    markets: 'all',
+    books: 'all',
+    leagues: ['nba', 'nfl', 'ncaab', 'ncaaf', 'nhl', 'soccer', 'tennis', 'ufc', 'golf', 'mlb'],
+    devigType: 'synth',
+    devigMethod: 'probit',
+    minBooks: 2,
+    hoursTillEvent: 999
+  };
+
+  // Application scan defaults. Centralized here; every standard preset and a
+  // fresh Builder session should explicitly use these (see presetCommandState
+  // / resetBuilder in app.js) rather than relying on the saved command's
+  // broader inherited config.
   var DEFAULTS = {
-    book: 'dk',
+    books: ['dk'],
     sharps: ['pinny', 'circa', 'bm', 'novig'],
     minBooks: 2,
-    minLimit: 1000
+    minLimit: 1000,
+    hoursTillEvent: 18
   };
+
+  /*
+   * Documents which EV Bot parameters apply to which saved-command types, per
+   * the bot's /create_command documentation. This app only ever builds
+   * `/run command_name:all` (command type 'run_all') — the other command
+   * types are recorded here so applicability is explicit structured data
+   * rather than assumed, and so a param is never exposed in the Builder just
+   * because it exists somewhere in the docs. `exposedInBuilder: false` means
+   * the field is deliberately withheld from the standard UI even though the
+   * bot may accept it (see notes on hold/odds_surge).
+   */
+  var PARAM_SCHEMA = [
+    { field: 'leagues', label: 'League', control: 'multiselect', commandTypes: ['run_all', 'ev_adhoc'], csv: true, placement: 'core' },
+    { field: 'markets', label: 'Markets', control: 'multiselect', commandTypes: ['run_all', 'ev_adhoc'], csv: true, allowedValues: null, notes: 'Also accepts special selectors "all", "player", "!player".', placement: 'core' },
+    { field: 'name', label: 'Name', control: 'text', commandTypes: ['run_all', 'ev_adhoc'], placement: 'core' },
+    { field: 'sharps', label: 'Sharps', control: 'multiselect', commandTypes: ['run_all', 'ev_adhoc'], csv: true, default: ['pinny', 'circa', 'bm', 'novig'], placement: 'scan' },
+    { field: 'books', label: 'Target Books', control: 'multiselect', commandTypes: ['run_all', 'ev_adhoc'], csv: true, default: ['dk'], placement: 'scan' },
+    { field: 'min_books', label: 'Min Books', control: 'number', commandTypes: ['run_all', 'ev_adhoc'], default: 2, placement: 'scan' },
+    { field: 'min_limit', label: 'Min Sharp Limit', control: 'number', commandTypes: ['run_all', 'ev_adhoc'], default: 1000, placement: 'scan' },
+    { field: 'hours_till_event', label: 'Hours Till Event', control: 'number', commandTypes: ['run_all', 'ev_adhoc'], default: 18, allowNegative: true, placement: 'scan' },
+    { field: 'ev_min', label: 'Min EV', control: 'number', commandTypes: ['run_all', 'ev_adhoc'], suffix: '%', placement: 'filters' },
+    { field: 'min_odds', label: 'Min Odds', control: 'number', commandTypes: ['run_all', 'ev_adhoc'], allowNegative: true, placement: 'filters' },
+    { field: 'max_odds', label: 'Max Odds', control: 'number', commandTypes: ['run_all', 'ev_adhoc'], allowNegative: true, placement: 'filters' },
+    { field: 'teams', label: 'Teams', control: 'text', commandTypes: ['run_all', 'ev_adhoc'], csv: true, placement: 'filters' },
+    { field: 'players', label: 'Players', control: 'text', commandTypes: ['run_all', 'ev_adhoc'], csv: true, placement: 'filters' },
+    { field: 'live', label: 'Live Status', control: 'segmented', commandTypes: ['run_all', 'ev_adhoc'], allowedValues: ['pregame', 'live', 'all'], notes: 'Bot default is pregame; omit unless explicitly overridden.', placement: 'filters' },
+    { field: 'boost_percentage', label: 'Boost %', control: 'number', commandTypes: ['run_all', 'ev_adhoc'], suffix: '%', placement: 'advanced' },
+    { field: 'is_main', label: 'Main Only', control: 'toggle', commandTypes: ['run_all', 'ev_adhoc'], placement: 'advanced' },
+    { field: 'exclude_one_ways', label: 'Exclude One Ways', control: 'toggle', commandTypes: ['run_all', 'ev_adhoc'], placement: 'advanced' },
+    { field: 'devig_type', label: 'Devig Type', control: 'select', commandTypes: ['run_all', 'ev_adhoc'], allowedValues: ['synth', 'avg'], inheritedDefault: 'synth', placement: 'advanced' },
+    { field: 'devig_method', label: 'Devig Method', control: 'select', commandTypes: ['run_all', 'ev_adhoc'], allowedValues: ['probit', 'power', 'wc'], inheritedDefault: 'probit', placement: 'advanced' },
+    { field: 'hold', label: 'Hold', control: 'number', commandTypes: ['create_command'], notes: 'Only documented for /create_command; not assumed valid for /run command_name:all.', exposedInBuilder: false, placement: 'unexposed' },
+    { field: 'odds_surge', label: 'Odds Surge', control: 'toggle', commandTypes: ['ev_adhoc'], notes: 'Documented for ad-hoc EV commands. Support as a /run command_name:all runtime override is unverified.', exposedInBuilder: false, placement: 'unexposed' },
+    { field: 'min_percentage', label: 'Min Percentage', control: 'number', commandTypes: ['odds', 'one_way'], notes: 'Type-specific to Odds/One Way commands, not EV.', exposedInBuilder: false, placement: 'unexposed' },
+    { field: 'min_discrep', label: 'Min Discrepancy', control: 'number', commandTypes: ['discreps'], notes: 'Type-specific to Discreps commands, not EV.', exposedInBuilder: false, placement: 'unexposed' }
+  ];
 
   var PRESETS = [
     // MLB
@@ -239,7 +297,9 @@ window.EV_CONFIG = (function () {
     LEAGUES: LEAGUES,
     MARKET_GROUPS: MARKET_GROUPS,
     BOOK_TOKEN_OVERRIDES: BOOK_TOKEN_OVERRIDES,
+    SAVED_ALL_COMMAND: SAVED_ALL_COMMAND,
     DEFAULTS: DEFAULTS,
+    PARAM_SCHEMA: PARAM_SCHEMA,
     PRESETS: PRESETS
   };
 })();
